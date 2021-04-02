@@ -7,9 +7,27 @@
 #include <libcamera/libcamera.h>
 #include "buffer_writer.h"
 
+#include <QApplication>
+#include <QLabel>
+
 using namespace libcamera;
 
 std::shared_ptr<libcamera::Camera> camera;
+
+QImage myImage;
+QLabel *myLabel = NULL;
+
+static const QMap<libcamera::PixelFormat, QImage::Format> nativeFormats
+{
+#if QT_VERSION >= QT_VERSION_CHECK(5, 2, 0)
+    {libcamera::formats::ABGR8888, QImage::Format_RGBA8888},
+#endif
+        {libcamera::formats::ARGB8888, QImage::Format_RGB32},
+#if QT_VERSION >= QT_VERSION_CHECK(5, 14, 0)
+        {libcamera::formats::RGB888, QImage::Format_BGR888},
+#endif
+        {libcamera::formats::BGR888, QImage::Format_RGB888},
+};
 
 static void requestComplete(Request *request)
 {
@@ -21,13 +39,9 @@ static void requestComplete(Request *request)
 
     const std::map<const Stream *, FrameBuffer *> &buffers = request->buffers();
 
-    int i = 0;
     for (auto bufferPair : buffers)
     {
-        const Stream *stream = bufferPair.first;
         FrameBuffer *buffer = bufferPair.second;
-
-		const std::string &name = "Stream" + std::to_string(++i);
 
         const FrameMetadata &metadata = buffer->metadata();
         std::cout << " seq: " << std::setw(6) << std::setfill('0') << metadata.sequence << " bytesused: ";
@@ -39,15 +53,19 @@ static void requestComplete(Request *request)
             if (++nplane < metadata.planes.size())
                 std::cout << "/";
         }
-        
+
         std::cout << std::endl;
 
         writer.mapBuffer(buffer);
-		writer.write(buffer, name);
+        writer.write(buffer, "temp");
+
+        myImage.load("temp");
+        myLabel->setPixmap(QPixmap::fromImage(myImage));
+        myLabel->show();
     }
 
     request->reuse(Request::ReuseBuffers);
-    
+
     if (!request)
     {
         std::cerr << "Can't create request" << std::endl;
@@ -57,8 +75,10 @@ static void requestComplete(Request *request)
     camera->queueRequest(request);
 }
 
-int main()
+int main(int argc, char *argv[])
 {
+    QApplication a(argc, argv);
+
     libcamera::CameraManager *cm = new libcamera::CameraManager();
     cm->start();
 
@@ -74,8 +94,24 @@ int main()
     std::unique_ptr<libcamera::CameraConfiguration> config = camera->generateConfiguration({libcamera::StreamRole::Viewfinder});
 
     libcamera::StreamConfiguration &streamConfig = config->at(0);
-    streamConfig.size.width = 640;
-    streamConfig.size.height = 480;
+    // streamConfig.size.width = 640;
+    // streamConfig.size.height = 480;
+
+    /* Use a format supported by the viewfinder if available. */
+    std::vector<PixelFormat> formats = streamConfig.formats().pixelformats();
+    for (const PixelFormat &format : nativeFormats.keys())
+    {
+        auto match = std::find_if(formats.begin(), formats.end(),
+                                  [&](const PixelFormat &f) {
+                                      return f == format;
+                                  });
+        if (match != formats.end())
+        {
+            streamConfig.pixelFormat = format;
+            break;
+        }
+    }
+
     config->validate();
 
     std::cout << "Default viewfinder configuration is: " << streamConfig.toString() << std::endl;
@@ -120,21 +156,25 @@ int main()
     }
 
     camera->requestCompleted.connect(requestComplete);
+    myLabel = new QLabel;
 
     camera->start();
     for (std::shared_ptr<libcamera::Request> request : requests)
     {
         camera->queueRequest(request.get());
+        // myLabel.show();
+        std::cout << "called\n";
     }
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(3000));
+    // std::this_thread::sleep_for(std::chrono::milliseconds(3000));
 
-    camera->stop();
-    allocator->free(stream);
-    delete allocator;
-    camera->release();
-    camera.reset();
-    cm->stop();
+    return a.exec();
+    // camera->stop();
+    // allocator->free(stream);
+    // delete allocator;
+    // camera->release();
+    // camera.reset();
+    // cm->stop();
 
-    return 0;
+    // return 0;
 }

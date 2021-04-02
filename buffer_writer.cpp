@@ -45,18 +45,18 @@ void BufferWriter::mapBuffer(FrameBuffer *buffer)
 
 int BufferWriter::write(FrameBuffer *buffer, const std::string &streamName)
 {
-	std::string filename;
+	std::string filename = streamName;
 	size_t pos;
 	int fd, ret = 0;
 
-	filename = pattern_;
-	pos = filename.find_first_of('#');
-	if (pos != std::string::npos) {
-		std::stringstream ss;
-		ss << streamName << "-" << std::setw(6)
-		   << std::setfill('0') << buffer->metadata().sequence;
-		filename.replace(pos, 1, ss.str());
-	}
+	// filename = pattern_;
+	// pos = filename.find_first_of('#');
+	// if (pos != std::string::npos) {
+	// 	std::stringstream ss;
+	// 	ss << streamName << "-" << std::setw(6)
+	// 	   << std::setfill('0') << buffer->metadata().sequence;
+	// 	filename.replace(pos, 1, ss.str());
+	// }
 
 	fd = open(filename.c_str(), O_CREAT | O_WRONLY |
 		  (pos == std::string::npos ? O_APPEND : O_TRUNC),
