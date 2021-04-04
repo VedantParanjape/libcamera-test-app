@@ -3,9 +3,9 @@
 #include <memory>
 #include <chrono>
 #include <thread>
+#include <sys/mman.h>
 
 #include <libcamera/libcamera.h>
-#include "buffer_writer.h"
 
 #include <QApplication>
 #include <QLabel>
@@ -13,9 +13,19 @@
 using namespace libcamera;
 
 std::shared_ptr<libcamera::Camera> camera;
-
 QImage myImage;
 QLabel *myLabel = NULL;
+
+// void libcamera_close(std::shared_ptr<libcamera::Camera> camera, FrameBufferAllocator *allocator, Stream* stream, libcamera::CameraManager *cm)
+// {
+//     std::cout << "end\n";
+//     camera->stop();
+//     allocator->free(stream);
+//     delete allocator;
+//     camera->release();
+//     camera.reset();
+//     cm->stop();
+// }
 
 static const QMap<libcamera::PixelFormat, QImage::Format> nativeFormats
 {
@@ -31,7 +41,6 @@ static const QMap<libcamera::PixelFormat, QImage::Format> nativeFormats
 
 static void requestComplete(Request *request)
 {
-    BufferWriter writer;
     if (request->status() == Request::RequestCancelled)
     {
         return;
@@ -56,10 +65,11 @@ static void requestComplete(Request *request)
 
         std::cout << std::endl;
 
-        writer.mapBuffer(buffer);
-        writer.write(buffer, "temp");
+        size_t size = buffer->metadata().planes[0].bytesused;
+        const FrameBuffer::Plane &plane = buffer->planes().front();
+        void *memory = mmap(NULL, plane.length, PROT_READ, MAP_SHARED, plane.fd.fd(), 0);
 
-        myImage.load("temp");
+        myImage.loadFromData(static_cast<unsigned char *>(memory), (int)size);
         myLabel->setPixmap(QPixmap::fromImage(myImage));
         myLabel->show();
     }
@@ -77,7 +87,7 @@ static void requestComplete(Request *request)
 
 int main(int argc, char *argv[])
 {
-    QApplication a(argc, argv);
+    QApplication window(argc, argv);
 
     libcamera::CameraManager *cm = new libcamera::CameraManager();
     cm->start();
@@ -162,19 +172,16 @@ int main(int argc, char *argv[])
     for (std::shared_ptr<libcamera::Request> request : requests)
     {
         camera->queueRequest(request.get());
-        // myLabel.show();
-        std::cout << "called\n";
     }
 
-    // std::this_thread::sleep_for(std::chrono::milliseconds(3000));
+    int ret = window.exec();
 
-    return a.exec();
-    // camera->stop();
-    // allocator->free(stream);
-    // delete allocator;
-    // camera->release();
-    // camera.reset();
-    // cm->stop();
+    camera->stop();
+    allocator->free(stream);
+    delete allocator;
+    camera->release();
+    camera.reset();
+    cm->stop();
 
-    // return 0;
+    return ret;
 }

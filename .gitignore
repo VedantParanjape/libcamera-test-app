@@ -1,0 +1,4 @@
+*.o
+libcamera-test-app
+.qmake.stash
+.vscode/
