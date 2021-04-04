@@ -15,3 +15,4 @@ make
 ./libcamera-test-app
 ```
 
+![](app-running-capture.png)
