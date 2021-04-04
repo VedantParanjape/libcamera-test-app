@@ -3,29 +3,21 @@
 #include <memory>
 #include <chrono>
 #include <thread>
+#include <ctime>
 #include <sys/mman.h>
 
 #include <libcamera/libcamera.h>
 
 #include <QApplication>
 #include <QLabel>
+#include <QPainter>
 
 using namespace libcamera;
 
-std::shared_ptr<libcamera::Camera> camera;
-QImage myImage;
-QLabel *myLabel = NULL;
-
-// void libcamera_close(std::shared_ptr<libcamera::Camera> camera, FrameBufferAllocator *allocator, Stream* stream, libcamera::CameraManager *cm)
-// {
-//     std::cout << "end\n";
-//     camera->stop();
-//     allocator->free(stream);
-//     delete allocator;
-//     camera->release();
-//     camera.reset();
-//     cm->stop();
-// }
+static std::shared_ptr<libcamera::Camera> camera;
+static QImage viewfinder;
+static QLabel *viewfinder_label = NULL;
+static clock_t prev_time = 0;
 
 static const QMap<libcamera::PixelFormat, QImage::Format> nativeFormats
 {
@@ -69,25 +61,29 @@ static void requestComplete(Request *request)
         const FrameBuffer::Plane &plane = buffer->planes().front();
         void *memory = mmap(NULL, plane.length, PROT_READ, MAP_SHARED, plane.fd.fd(), 0);
 
-        myImage.loadFromData(static_cast<unsigned char *>(memory), (int)size);
-        myLabel->setPixmap(QPixmap::fromImage(myImage));
-        myLabel->show();
+        viewfinder.loadFromData(static_cast<unsigned char *>(memory), (int)size);
+
+        clock_t current_time = std::clock();
+        std::string fps_string = "FPS: " + std::to_string(CLOCKS_PER_SEC/(float)(current_time - prev_time));
+        prev_time = current_time;
+
+        QPainter fps_label(&viewfinder);
+        fps_label.setPen(QPen(Qt::black));
+        fps_label.setFont(QFont("Times", 18, QFont::Bold));
+        fps_label.drawText(viewfinder.rect(), Qt::AlignBottom | Qt::AlignLeft, QString::fromStdString(fps_string));
+
+        viewfinder_label->setPixmap(QPixmap::fromImage(viewfinder));
+        viewfinder_label->show();
     }
 
     request->reuse(Request::ReuseBuffers);
-
-    if (!request)
-    {
-        std::cerr << "Can't create request" << std::endl;
-        return;
-    }
-
     camera->queueRequest(request);
 }
 
 int main(int argc, char *argv[])
 {
     QApplication window(argc, argv);
+    viewfinder_label = new QLabel;
 
     libcamera::CameraManager *cm = new libcamera::CameraManager();
     cm->start();
@@ -101,13 +97,10 @@ int main(int argc, char *argv[])
     camera = cm->get(camera_id);
     camera->acquire();
 
-    std::unique_ptr<libcamera::CameraConfiguration> config = camera->generateConfiguration({libcamera::StreamRole::Viewfinder});
+    std::unique_ptr<libcamera::CameraConfiguration> config = camera->generateConfiguration({libcamera::StreamRole::Raw});
 
     libcamera::StreamConfiguration &streamConfig = config->at(0);
-    // streamConfig.size.width = 640;
-    // streamConfig.size.height = 480;
 
-    /* Use a format supported by the viewfinder if available. */
     std::vector<PixelFormat> formats = streamConfig.formats().pixelformats();
     for (const PixelFormat &format : nativeFormats.keys())
     {
@@ -115,6 +108,7 @@ int main(int argc, char *argv[])
                                   [&](const PixelFormat &f) {
                                       return f == format;
                                   });
+
         if (match != formats.end())
         {
             streamConfig.pixelFormat = format;
@@ -123,13 +117,10 @@ int main(int argc, char *argv[])
     }
 
     config->validate();
-
     std::cout << "Default viewfinder configuration is: " << streamConfig.toString() << std::endl;
-
     camera->configure(config.get());
 
     FrameBufferAllocator *allocator = new FrameBufferAllocator(camera);
-
     for (StreamConfiguration &cfg : *config)
     {
         int ret = allocator->allocate(cfg.stream());
@@ -142,18 +133,17 @@ int main(int argc, char *argv[])
 
     Stream *stream = streamConfig.stream();
     const std::vector<std::unique_ptr<FrameBuffer>> &buffers = allocator->buffers(stream);
-    std::vector<std::shared_ptr<Request>> requests;
+    std::vector<std::unique_ptr<Request>> requests;
 
-    for (unsigned int i = 0; i < buffers.size(); ++i)
+    for (const std::unique_ptr<FrameBuffer> &buffer : buffers)
     {
-        std::shared_ptr<Request> request = camera->createRequest();
+        std::unique_ptr<Request> request = camera->createRequest();
         if (!request)
         {
             std::cerr << "Can't create request" << std::endl;
             return -ENOMEM;
         }
 
-        const std::unique_ptr<FrameBuffer> &buffer = buffers[i];
         int ret = request->addBuffer(stream, buffer.get());
         if (ret < 0)
         {
@@ -162,14 +152,13 @@ int main(int argc, char *argv[])
             return ret;
         }
 
-        requests.push_back(request);
+        requests.push_back(std::move(request));
     }
 
     camera->requestCompleted.connect(requestComplete);
-    myLabel = new QLabel;
 
     camera->start();
-    for (std::shared_ptr<libcamera::Request> request : requests)
+    for (std::unique_ptr<libcamera::Request> &request : requests)
     {
         camera->queueRequest(request.get());
     }
@@ -182,6 +171,7 @@ int main(int argc, char *argv[])
     camera->release();
     camera.reset();
     cm->stop();
+    delete viewfinder_label;
 
     return ret;
 }
